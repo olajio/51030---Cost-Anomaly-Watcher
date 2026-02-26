@@ -1,0 +1,19 @@
+We would like to modify the logic that controls if we comment on an existing open ticket vs create a new ticket. I can best describe it using 2 different scenarios:
+
+      Scenario 1 - create a new ticket when priority goes goes up. Given:
+            - at 10:05 AM a ticket gets created,
+            - the hostname name  is "costam-shd CodeBuild"
+            - the priority is P3.
+            - at 10:45 AM the ticket has not been closed.
+            - at 10:45 AM a notification comes in for "costam-shd CodeBuild" but the priority is either P1 or P2
+            - we want a new ticket created.
+            -we would also want a new ticket created if the original ticket priority were P2 and the new notification for the same hostname were P1
+
+      Scenario 2 - update the existing ticket if priority drops:
+            - at 10:05 AM a ticket gets created,
+            - the hostname name  is "costam-shd CodeBuild"
+            - the priority is P1.
+            - at 10:45 AM the ticket has not been closed.
+            - at 10:45 AM a notification comes in for "costam-shd CodeBuild" but the priority is P2 or P3
+            - update the existing ticket. I think we add a comment.
+            - Same would be try if existing ticket were P2 and new notification is P3. Update the existing ticket
