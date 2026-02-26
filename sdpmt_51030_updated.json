@@ -1,0 +1,371 @@
+{
+  "trigger": {
+    "schedule": {
+      "interval": "30m"
+    }
+  },
+  "input": {
+    "chain": {
+      "inputs": [
+        {
+          "sdpmt": {
+            "search": {
+              "request": {
+                "search_type": "query_then_fetch",
+                "indices": [
+                  "sdpmt_amdb"
+                ],
+                "rest_total_hits_as_int": true,
+                "body": {
+                  "size": 10,
+                  "query": {
+                    "bool": {
+                      "filter": [
+                        {
+                          "match_phrase": {
+                            "target.keyword": "{{ ctx.metadata.event_type }}"
+                          }
+                        }
+                      ]
+                    }
+                  },
+                  "aggs": {
+                    "target": {
+                      "terms": {
+                        "field": "target.keyword",
+                        "size": 100
+                      },
+                      "aggs": {
+                        "hits": {
+                          "top_hits": {
+                            "_source": [
+                              "alert_status"
+                            ],
+                            "size": 20
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "errors": {
+            "search": {
+              "request": {
+                "search_type": "query_then_fetch",
+                "indices": [
+                  "prod:filebeat-*-mt-*"
+                ],
+                "rest_total_hits_as_int": true,
+                "template": {
+                  "source": """
+                      {
+                        "size": 0,
+                        "query": {
+                          "bool": {
+                            "filter": [
+                              {
+                                "terms": {
+                                  "_tier": [
+                                    "data_hot",
+                                    "data_content"
+                                    ]
+                                }
+                              },
+                              {
+                                "term": {
+                                  "cloud.account.id": "417330998292"
+                                }
+                              },
+                              {
+                                "range": {
+                                  "@timestamp": {
+                                    "gte": "now-{{ctx.metadata.timeRangeValue}}{{ctx.metadata.timeRangeUnit}}"
+                                  }
+                                }
+                              },
+                              {
+                                "term": {
+                                  "cloud.service.name": "Cost Anomaly Alerting"
+                                }
+                              }
+                              ]
+                              
+                          }
+                        },
+                        "aggs": {
+                          "targets": {
+                            "terms": {
+                              "field": "labels.alert.monitor.name",
+                              "size": 5000
+                            },
+                            "aggs": {
+                              "top_hits": {
+                                  "top_hits": {
+                                  "size": 1,
+                                  "_source": [
+                                      "labels.alert.impact.total_impact",
+                                      "labels.alert.subscription.name",
+                                      "labels.alert.member.account.name",
+                                      "labels.alert.member.account.id",
+                                      "labels.alert.monitor.owner",
+                                      "labels.alert.anomaly_details_link"
+                                  ]
+                                  }
+                              }
+                              }
+                          }
+                        }
+                      }""",
+                  "lang": "mustache"
+                }
+              }
+            }
+          }
+        },
+        {
+          "targets_to_alert_on": {
+            "transform": {
+              "script": {
+                "source": """
+                // flatten the list of targets_to_alert_on to use in the open_tickets input
+                return ctx.payload.errors.aggregations.targets.buckets.stream().map(b -> b.key).collect(Collectors.toList());""",
+                "lang": "painless"
+              }
+            }
+          }
+        },
+        {
+          "open_tickets": {
+            "search": {
+              "request": {
+                "search_type": "query_then_fetch",
+                "indices": [
+                  "sdpmt_tickets"
+                ],
+                "rest_total_hits_as_int": true,
+                "template": {
+                  "source": """
+                        {
+                          "size": 5000,
+                          "query": {
+                            "bool": {
+                              "filter": [
+                                {
+                                  "terms": {
+                                    "host.target": {{#toJson}}ctx.payload.targets_to_alert_on._value{{/toJson}}
+                                  }
+                                },
+                                {
+                                  "term": {
+                                    "status": "open"
+                                  }
+                                },
+                                {
+                                  "term": {
+                                    "event_type": "{{ ctx.metadata.event_type }}"
+                                  }
+                                }
+                              ]
+                            }
+                          }
+                        }
+                        """,
+                  "lang": "mustache"
+                }
+              }
+            }
+          }
+        }
+      ]
+    }
+  },
+  "condition": {
+    "script": {
+      "source": """
+            // Alert if have any results in the aggregation and the alert_status is enabled
+            return ctx.payload.errors.aggregations.targets.buckets.size() > 0  && ctx.payload.sdpmt.hits.hits[0]._source.alert_status == 'enabled';
+          """,
+      "lang": "painless"
+    }
+  },
+  "actions": {
+    "comment_tickets": {
+      "condition": {
+        "script": {
+          "source": "ctx.payload.to_comment.size() > 0",
+          "lang": "painless"
+        }
+      },
+      "foreach": "ctx.payload.to_comment",
+      "max_iterations": 1000,
+      "webhook": {
+        "scheme": "https",
+        "host": "elk-support.hedgeserv.com",
+        "port": 443,
+        "method": "put",
+        "path": "/api/v3/requests/{{ ctx.payload.ticket_id }}",
+        "params": {
+          "input_data": """{
+            "request": {
+                "udf_fields": {
+                    "udf_sline_96001": "{{ ctx.trigger.triggered_time }}"
+                }
+            }
+        }"""
+        },
+        "headers": {
+          "Content-Type": "application/x-www-form-urlencoded",
+          "technician_key": "XXXXXXXXXXXXXXXXXXX"
+        },
+        "connection_timeout_in_millis": 30000,
+        "read_timeout_millis": 30000
+      }
+    },
+    "open_tickets": {
+      "condition": {
+        "script": {
+          "source": "ctx.payload.to_open.size() > 0",
+          "lang": "painless"
+        }
+      },
+      "foreach": "ctx.payload.to_open",
+      "max_iterations": 1000,
+      "webhook": {
+        "scheme": "https",
+        "host": "elk-support.hedgeserv.com",
+        "port": 443,
+        "method": "post",
+        "path": "/api/v3/requests",
+        "params": {
+          "input_data": """{
+          "request": {
+            "subject": "{{ ctx.metadata.amdb_name }} - Cost Anomaly Detection has found an issue with monitor name: {{ ctx.payload.key }}. The total impact of the anomaly is {{ ctx.payload.total_impact }}",
+            "description": "<h3>Cost Anomaly Detection has identified an issue as follows:</h3><p>Monitor Name: {{ ctx.payload.key }}</p><p>Subscription Name: {{ ctx.payload.top_hits.hits.hits.0._source.labels.alert.subscription.name }}</p><p>Account Name: {{ ctx.payload.top_hits.hits.hits.0._source.labels.alert.member.account.name }}</p><p>The owner of this issue is: {{ ctx.payload.top_hits.hits.hits.0._source.labels.alert.monitor.owner }}.</p><p>The total impact of the anomaly is {{ ctx.payload.total_impact }}.</p><p><a href='{{ctx.metadata.amdb_link}}'>AMDB Link</a></p><p>The Cost Anomaly Alert details are in the Parent Account (417330998292). To view the details, you must first log into the AWS Parent Account. Then copy and paste this link into your browser <br><br>{{ ctx.payload.top_hits.hits.hits.0._source.labels.alert.anomaly_details_link }}</p>{{ ctx.metadata.please_copy_d }}<p>{{ ctx.metadata.elk_url }}{{ ctx.metadata.discover_pre_time_filter }}(from:'{{ ctx.payload.min_time }}',to:'{{ ctx.trigger.triggered_time }}'){{ ctx.metadata.discover_post_time_filter }}</p>{{ctx.metadata.extra_message}}",
+            "requester": {
+               "name": "service-elastic"
+            },
+            "template": {
+               "name": "Elastic Search Alerts"
+            },
+            "service_category": {
+               "name": "Report an Incident"
+            },
+            "priority": {
+               "name": "{{ ctx.payload.ticket_priority }}"
+            },
+            "group": {
+               "name": "{{ ctx.metadata.ticket_group }}"
+            },
+            "status": {
+               "name": "Open"
+            },
+            "udf_fields": {
+               "udf_sline_49837": "{{ ctx.trigger.triggered_time }}",
+               "udf_sline_53701": "", 
+               "udf_sline_49808": "{{ ctx.metadata.event_type }}",
+               "udf_sline_49805": "{{ ctx.payload.key }}",
+               "udf_sline_53703": "{{ ctx.payload.total_impact }}",
+               "udf_sline_65101": "",
+               "udf_sline_65102": "{{ ctx.payload.top_hits.hits.hits.0._source.labels.alert.member.account.name }}",
+               "udf_sline_65104": "",
+               "udf_sline_93302": "{{ ctx.payload.top_hits.hits.hits.0._source.labels.alert.monitor.owner }}"
+            },
+            "category": {
+               "name": "{{ ctx.metadata.ticket_category }}"
+            },
+            "subcategory": {
+               "name": "{{ ctx.metadata.ticket_subcategory }}"
+            }
+          }
+        }"""
+        },
+        "headers": {
+          "Content-Type": "application/x-www-form-urlencoded",
+          "technician_key": "XXXXXXXXXXXXXXXXXXX"
+        }
+      }
+    }
+  },
+  "metadata": {
+    "elk_url": "https://287d86a4b1184182b340bd5074cdfd7e.us-east-1.aws.found.io:9243/s/information-technology/app",
+    "amdb_name": "51030 - Cost Anomaly",
+    "ticket_category": "Elastic-AWS-MT",
+    "amdb_link": "https://hedgeservcorp.sharepoint.com/sites/globaltechnology/amdb/sitepages/51030.aspx",
+    "data_content": "data_content",
+    "extra_message": "<p><BR><BR><BR><b>*Apologies for the copy paste of these URLs, but Manage Engine does not support extemely long imbedded links</b></p>",
+    "timeRangeUnit": "s",
+    "discover_pre_time_filter": "/discover#/view/c6d1d337-e91b-418f-b2b5-3889405c0a66?_g=(filters:!(),refreshInterval:(pause:!t,value:65000),time:",
+    "event_type": "sdpmt_51030",
+    "timeRangeValue": 1805,
+    "teams_webhook_itsm": "/webhookb2/39110328-ac0c-49b2-9261-eb9e4c8b1ae4@39e63823-376a-43fc-9fdd-4a3932faab97/IncomingWebhook/0f7fcb34f7de4025bbb2b59db86ff14d/535a32ca-0c5b-41cb-aaa9-dd0ed0f6628f/V2iUlGEB_YvvFImVQ6mYWjofeQh8UgGHkbfuVHHcEo_4s1",
+    "please_copy_d": "<p><b>Please copy and paste the link below to your browser to see the deatils in Discover</b></p>",
+    "ticket_group": "Service Desk Operations",
+    "discover_post_time_filter": ")&_a=(columns:!(labels.alert.member.account.id,labels.alert.member.account.name,labels.alert.subscription.name,labels.alert.monitor.name,labels.alert.impact.total_impact,labels.alert.impact.total_impact_percentage,labels.alert.anomaly_details_link),filters:!(('$state':(store:appState),meta:(alias:!n,disabled:!f,field:cloud.service.name,index:'537f0c0a-3b04-5c03-8b9c-6eee829e73f8',key:cloud.service.name,negate:!f,params:(query:'Cost%20Anomaly%20Alerting'),type:phrase),query:(match_phrase:(cloud.service.name:'Cost%20Anomaly%20Alerting')))),grid:(),hideChart:!f,index:'537f0c0a-3b04-5c03-8b9c-6eee829e73f8',interval:auto,query:(language:kuery,query:''),sort:!(!('@timestamp',desc)))",
+    "ticket_subcategory": "Lambda",
+    "id": "sdpmt_51030",
+    "data_hot": "data_hot"
+  },
+  "transform": {
+    "script": {
+      "source": """
+            // grab targets with open tickets and remember their IDs and priorities in a map
+            // ASSUMPTION: The 'sdpmt_tickets' index contains a 'priority' field storing the priority string
+            // e.g., '1 - Critical', '2 - High', '3 - Moderate'
+            // *** VERIFY THIS FIELD NAME ('priority') EXISTS IN sdpmt_tickets ***
+            Map opened = ctx.payload.open_tickets.hits.hits.stream().collect(Collectors.toMap(
+              h -> h._source.host.target,
+              h -> ['ticket_id': h._source.ticket_id, 'priority': h._source.priority]
+            ));
+            
+            // store two lists of host buckets
+            List to_open = [];
+            List to_comment = [];
+            
+            for (Map host: ctx.payload.errors.aggregations.targets.buckets) {
+                def ticket_priority = '3 - Moderate';
+
+                def total_impact = host.top_hits.hits.hits.0._source.labels.alert.impact.total_impact;
+                if (total_impact >= 750 && total_impact < 2500) {
+                  ticket_priority = '2 - High';
+                } else if (total_impact >= 2500) {
+                  ticket_priority = '1 - Critical';
+                }
+                host.ticket_priority = ticket_priority;
+                host.total_impact = total_impact;
+                host.min_time = Instant.ofEpochMilli(ctx.trigger.triggered_time.getMillis()).minusSeconds(3900);
+
+                if (opened.containsKey(host.key)) {
+                  def existing = opened[host.key];
+                  
+                  // Extract numeric priority: '1 - Critical' -> 1, '2 - High' -> 2, '3 - Moderate' -> 3
+                  int new_prio = Integer.parseInt(ticket_priority.substring(0, 1));
+                  int existing_prio = Integer.parseInt(existing.priority.substring(0, 1));
+                  
+                  if (new_prio < existing_prio) {
+                    // Priority escalation (e.g., P3 -> P1): create a NEW ticket
+                    to_open.add(host);
+                  } else {
+                    // Priority same or de-escalated (e.g., P1 -> P2, or P2 -> P2): comment on existing ticket
+                    host.ticket_id = existing.ticket_id;
+                    to_comment.add(host);
+                  }
+                } else {
+                  to_open.add(host);
+                }
+ 
+            }
+            // replace payload with our two lists
+            return [
+              'to_open': to_open,
+              'to_comment': to_comment
+            ];
+          """,
+      "lang": "painless"
+    }
+  }
+}
