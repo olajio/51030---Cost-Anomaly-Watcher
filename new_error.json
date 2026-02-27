@@ -1,0 +1,860 @@
+{
+  "watch_id": "sdpmt_51030_debug",
+  "node": "dc4COOVuRXexXycI1NYF0w",
+  "state": "executed",
+  "@timestamp": "2026-02-27T15:28:12.660Z",
+  "user": "oolajide@hedgeserv.com",
+  "status": {
+    "state": {
+      "active": true,
+      "timestamp": "2026-02-27T15:08:12.369Z"
+    },
+    "last_checked": "2026-02-27T15:28:12.660Z",
+    "last_met_condition": "2026-02-27T15:28:12.660Z",
+    "actions": {
+      "comment_tickets": {
+        "ack": {
+          "timestamp": "2026-02-27T15:08:05.206Z",
+          "state": "awaits_successful_execution"
+        }
+      },
+      "open_tickets": {
+        "ack": {
+          "timestamp": "2026-02-27T15:08:05.206Z",
+          "state": "awaits_successful_execution"
+        }
+      }
+    },
+    "execution_state": "executed",
+    "version": -1
+  },
+  "trigger_event": {
+    "type": "schedule",
+    "triggered_time": "2026-02-27T15:28:12.660Z",
+    "schedule": {
+      "scheduled_time": "2026-02-27T15:28:12.369Z"
+    }
+  },
+  "input": {
+    "chain": {
+      "inputs": [
+        {
+          "sdpmt": {
+            "search": {
+              "request": {
+                "search_type": "query_then_fetch",
+                "indices": [
+                  "sdpmt_amdb"
+                ],
+                "rest_total_hits_as_int": true,
+                "body": {
+                  "size": 10,
+                  "query": {
+                    "bool": {
+                      "filter": [
+                        {
+                          "match_phrase": {
+                            "target.keyword": "{{ ctx.metadata.event_type }}"
+                          }
+                        }
+                      ]
+                    }
+                  },
+                  "aggs": {
+                    "target": {
+                      "terms": {
+                        "field": "target.keyword",
+                        "size": 100
+                      },
+                      "aggs": {
+                        "hits": {
+                          "top_hits": {
+                            "_source": [
+                              "alert_status"
+                            ],
+                            "size": 20
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "errors": {
+            "search": {
+              "request": {
+                "search_type": "query_then_fetch",
+                "indices": [
+                  "prod:filebeat-*-mt-*"
+                ],
+                "rest_total_hits_as_int": true,
+                "template": {
+                  "source": "\n                      {\n                        \"size\": 0,\n                        \"query\": {\n                          \"bool\": {\n                            \"filter\": [\n                              {\n                                \"terms\": {\n                                  \"_tier\": [\n                                    \"data_hot\",\n                                    \"data_content\"\n                                    ]\n                                }\n                              },\n                              {\n                                \"term\": {\n                                  \"cloud.account.id\": \"417330998292\"\n                                }\n                              },\n                              {\n                                \"range\": {\n                                  \"@timestamp\": {\n                                    \"gte\": \"now-{{ctx.metadata.timeRangeValue}}{{ctx.metadata.timeRangeUnit}}\"\n                                  }\n                                }\n                              },\n                              {\n                                \"range\": {\n                                  \"@timestamp\": {\n                                    \"format\": \"strict_date_optional_time\",\n                                    \"gte\": \"2026-02-26T12:32:23.673Z\",\n                                    \"lte\": \"2026-02-26T13:37:23.673Z\"\n                                  }\n                                }\n                              },\n                              {\n                                \"term\": {\n                                  \"cloud.service.name\": \"Cost Anomaly Alerting\"\n                                }\n                              }\n                              ]\n                              \n                          }\n                        },\n                        \"aggs\": {\n                          \"targets\": {\n                            \"terms\": {\n                              \"field\": \"labels.alert.monitor.name\",\n                              \"size\": 5000\n                            },\n                            \"aggs\": {\n                              \"top_hits\": {\n                                  \"top_hits\": {\n                                  \"size\": 1,\n                                  \"_source\": [\n                                      \"labels.alert.impact.total_impact\",\n                                      \"labels.alert.subscription.name\",\n                                      \"labels.alert.member.account.name\",\n                                      \"labels.alert.member.account.id\",\n                                      \"labels.alert.monitor.owner\",\n                                      \"labels.alert.anomaly_details_link\"\n                                  ]\n                                  }\n                              }\n                              }\n                          }\n                        }\n                      }",
+                  "lang": "mustache"
+                }
+              }
+            }
+          }
+        },
+        {
+          "targets_to_alert_on": {
+            "transform": {
+              "script": {
+                "source": "\n                // flatten the list of targets_to_alert_on to use in the open_tickets input\n                return ctx.payload.errors.aggregations.targets.buckets.stream().map(b -> b.key).collect(Collectors.toList());",
+                "lang": "painless"
+              }
+            }
+          }
+        },
+        {
+          "open_tickets": {
+            "search": {
+              "request": {
+                "search_type": "query_then_fetch",
+                "indices": [
+                  "sdpmt_tickets"
+                ],
+                "rest_total_hits_as_int": true,
+                "template": {
+                  "source": "\n                        {\n                          \"size\": 5000,\n                          \"query\": {\n                            \"bool\": {\n                              \"filter\": [\n                                {\n                                  \"terms\": {\n                                    \"host.target\": {{#toJson}}ctx.payload.targets_to_alert_on._value{{/toJson}}\n                                  }\n                                },\n                                {\n                                  \"term\": {\n                                    \"status\": \"open\"\n                                  }\n                                },\n                                {\n                                  \"term\": {\n                                    \"event_type\": \"{{ ctx.metadata.event_type }}\"\n                                  }\n                                }\n                              ]\n                            }\n                          }\n                        }\n                        ",
+                  "lang": "mustache"
+                }
+              }
+            }
+          }
+        }
+      ]
+    }
+  },
+  "condition": {
+    "script": {
+      "source": "\n            // Alert if have any results in the aggregation and the alert_status is enabled\n            return ctx.payload.errors.aggregations.targets.buckets.size() > 0  && ctx.payload.sdpmt.hits.hits[0]._source.alert_status == 'enabled';\n          ",
+      "lang": "painless"
+    }
+  },
+  "metadata": {
+    "elk_url": "https://287d86a4b1184182b340bd5074cdfd7e.us-east-1.aws.found.io:9243/s/information-technology/app",
+    "amdb_name": "51030 - Cost Anomaly",
+    "ticket_category": "Elastic-AWS-MT",
+    "amdb_link": "https://hedgeservcorp.sharepoint.com/sites/globaltechnology/amdb/sitepages/51030.aspx",
+    "data_content": "data_content",
+    "extra_message": "<p><BR><BR><BR><b>*Apologies for the copy paste of these URLs, but Manage Engine does not support extemely long imbedded links</b></p>",
+    "timeRangeUnit": "d",
+    "discover_pre_time_filter": "/discover#/view/c6d1d337-e91b-418f-b2b5-3889405c0a66?_g=(filters:!(),refreshInterval:(pause:!t,value:65000),time:",
+    "event_type": "sdpmt_51030",
+    "ticket_group2": "Service Desk Operations",
+    "timeRangeValue": 2,
+    "teams_webhook_itsm": "/webhookb2/39110328-ac0c-49b2-9261-eb9e4c8b1ae4@39e63823-376a-43fc-9fdd-4a3932faab97/IncomingWebhook/0f7fcb34f7de4025bbb2b59db86ff14d/535a32ca-0c5b-41cb-aaa9-dd0ed0f6628f/V2iUlGEB_YvvFImVQ6mYWjofeQh8UgGHkbfuVHHcEo_4s1",
+    "please_copy_d": "<p><b>Please copy and paste the link below to your browser to see the deatils in Discover</b></p>",
+    "ticket_group": "Monitoring and Analytics - Testing",
+    "name": "51030 - Cost Anomaly DEBUG",
+    "discover_post_time_filter": ")&_a=(columns:!(labels.alert.member.account.id,labels.alert.member.account.name,labels.alert.subscription.name,labels.alert.monitor.name,labels.alert.impact.total_impact,labels.alert.impact.total_impact_percentage,labels.alert.anomaly_details_link),filters:!(('$state':(store:appState),meta:(alias:!n,disabled:!f,field:cloud.service.name,index:'537f0c0a-3b04-5c03-8b9c-6eee829e73f8',key:cloud.service.name,negate:!f,params:(query:'Cost%20Anomaly%20Alerting'),type:phrase),query:(match_phrase:(cloud.service.name:'Cost%20Anomaly%20Alerting')))),grid:(),hideChart:!f,index:'537f0c0a-3b04-5c03-8b9c-6eee829e73f8',interval:auto,query:(language:kuery,query:''),sort:!(!('@timestamp',desc)))",
+    "ticket_subcategory": "Lambda",
+    "id": "sdpmt_51030",
+    "xpack": {
+      "type": "json"
+    },
+    "data_hot": "data_hot"
+  },
+  "result": {
+    "execution_time": "2026-02-27T15:28:12.660Z",
+    "execution_duration": 33,
+    "input": {
+      "type": "chain",
+      "status": "success",
+      "payload": {
+        "sdpmt": {
+          "_shards": {
+            "total": 1,
+            "failed": 0,
+            "successful": 1,
+            "skipped": 0
+          },
+          "hits": {
+            "hits": [
+              {
+                "_index": "sdpmt_amdb",
+                "_source": {
+                  "alert_status": "enabled",
+                  "record": {
+                    "modified_by": "gsamodivekov@hedgeserv.com",
+                    "authentication_type": "TOKEN"
+                  },
+                  "release_type": [
+                    "placeholder1",
+                    "placeholder2"
+                  ],
+                  "tag_to_exclude": "itsma_placeholder",
+                  "target": "sdpmt_51030"
+                },
+                "_id": "sdpmt_51030",
+                "_score": 0
+              }
+            ],
+            "total": 1,
+            "max_score": 0
+          },
+          "took": 1,
+          "timed_out": false,
+          "aggregations": {
+            "target": {
+              "doc_count_error_upper_bound": 0,
+              "sum_other_doc_count": 0,
+              "buckets": [
+                {
+                  "hits": {
+                    "hits": {
+                      "hits": [
+                        {
+                          "_index": "sdpmt_amdb",
+                          "_source": {
+                            "alert_status": "enabled"
+                          },
+                          "_id": "sdpmt_51030",
+                          "_score": 0
+                        }
+                      ],
+                      "total": 1,
+                      "max_score": 0
+                    }
+                  },
+                  "doc_count": 1,
+                  "key": "sdpmt_51030"
+                }
+              ]
+            }
+          }
+        },
+        "open_tickets": {
+          "_shards": {
+            "total": 1,
+            "failed": 0,
+            "successful": 1,
+            "skipped": 0
+          },
+          "hits": {
+            "hits": [
+              {
+                "_index": "sdpmt_tickets",
+                "_source": {
+                  "actual": "",
+                  "aws_tag_label": "",
+                  "aws_account": "hedgeserv-app-prd",
+                  "threshold": "466.23",
+                  "ticket_id": "2158391",
+                  "priority": "3 - Moderate",
+                  "labels": {
+                    "client_code": ": {\n            "
+                  },
+                  "@timestamp": "2026-02-27T14:31:14.164Z",
+                  "event_type": "sdpmt_51030",
+                  "aws_region": "",
+                  "record": {
+                    "created_timestamp": "2026-02-27T14:31:55.193Z",
+                    "created_by": "track_sdpmt_tickets_watcher"
+                  },
+                  "host": {
+                    "target": "costam-prd HSMCS"
+                  },
+                  "status": "open"
+                },
+                "_id": "2158391",
+                "_score": 0
+              },
+              {
+                "_index": "sdpmt_tickets",
+                "_source": {
+                  "actual": "",
+                  "aws_tag_label": "",
+                  "aws_account": "hedgeserv-app-prd",
+                  "threshold": "466.23",
+                  "ticket_id": "2158445",
+                  "priority": "2 - High",
+                  "labels": {
+                    "client_code": ": {\n            "
+                  },
+                  "@timestamp": "2026-02-27T15:00:07.990Z",
+                  "event_type": "sdpmt_51030",
+                  "aws_region": "",
+                  "record": {
+                    "created_timestamp": "2026-02-27T15:00:55.035Z",
+                    "created_by": "track_sdpmt_tickets_watcher"
+                  },
+                  "host": {
+                    "target": "costam-prd HSMCS"
+                  },
+                  "status": "open"
+                },
+                "_id": "2158445",
+                "_score": 0
+              }
+            ],
+            "total": 2,
+            "max_score": 0
+          },
+          "took": 1,
+          "timed_out": false
+        },
+        "targets_to_alert_on": {
+          "_value": [
+            "costam-prd HSMCS"
+          ]
+        },
+        "errors": {
+          "_shards": {
+            "total": 732,
+            "failed": 0,
+            "successful": 732,
+            "skipped": 715
+          },
+          "hits": {
+            "hits": [],
+            "total": 1,
+            "max_score": null
+          },
+          "took": 28,
+          "_clusters": {
+            "running": 0,
+            "total": 1,
+            "details": {
+              "prod": {
+                "_shards": {
+                  "total": 732,
+                  "failed": 0,
+                  "successful": 732,
+                  "skipped": 715
+                },
+                "took": 24,
+                "indices": "filebeat-*-mt-*",
+                "timed_out": false,
+                "status": "successful"
+              }
+            },
+            "failed": 0,
+            "partial": 0,
+            "successful": 1,
+            "skipped": 0
+          },
+          "timed_out": false,
+          "aggregations": {
+            "targets": {
+              "doc_count_error_upper_bound": 0,
+              "sum_other_doc_count": 0,
+              "buckets": [
+                {
+                  "doc_count": 1,
+                  "top_hits": {
+                    "hits": {
+                      "hits": [
+                        {
+                          "_index": "prod:.ds-filebeat-8.11.0-mt-prd-2026.02.22-001251",
+                          "_source": {
+                            "labels": {
+                              "alert": {
+                                "anomaly_details_link": "https://console.aws.amazon.com/costmanagement/home#/anomaly-detection/monitors/96274bde-9403-4836-95e6-ef845546875c/anomalies/469c4a90-41f3-4c9c-88c1-c0f56479b243",
+                                "impact": {
+                                  "total_impact": 466.23
+                                },
+                                "member": {
+                                  "account": {
+                                    "name": "hedgeserv-app-prd",
+                                    "id": "444205886984"
+                                  }
+                                },
+                                "monitor": {
+                                  "owner": "TechOps"
+                                },
+                                "subscription": {
+                                  "name": "costam- $100 and 3%"
+                                }
+                              }
+                            }
+                          },
+                          "_id": "80abefbe-df49-4e89-9a66-e6a4221e01d0",
+                          "_score": 0
+                        }
+                      ],
+                      "total": 1,
+                      "max_score": 0
+                    }
+                  },
+                  "key": "costam-prd HSMCS"
+                }
+              ]
+            }
+          }
+        }
+      },
+      "chain": {
+        "sdpmt": {
+          "type": "search",
+          "status": "success",
+          "payload": {
+            "_shards": {
+              "total": 1,
+              "failed": 0,
+              "successful": 1,
+              "skipped": 0
+            },
+            "hits": {
+              "hits": [
+                {
+                  "_index": "sdpmt_amdb",
+                  "_source": {
+                    "alert_status": "enabled",
+                    "record": {
+                      "modified_by": "gsamodivekov@hedgeserv.com",
+                      "authentication_type": "TOKEN"
+                    },
+                    "release_type": [
+                      "placeholder1",
+                      "placeholder2"
+                    ],
+                    "tag_to_exclude": "itsma_placeholder",
+                    "target": "sdpmt_51030"
+                  },
+                  "_id": "sdpmt_51030",
+                  "_score": 0
+                }
+              ],
+              "total": 1,
+              "max_score": 0
+            },
+            "took": 1,
+            "timed_out": false,
+            "aggregations": {
+              "target": {
+                "doc_count_error_upper_bound": 0,
+                "sum_other_doc_count": 0,
+                "buckets": [
+                  {
+                    "hits": {
+                      "hits": {
+                        "hits": [
+                          {
+                            "_index": "sdpmt_amdb",
+                            "_source": {
+                              "alert_status": "enabled"
+                            },
+                            "_id": "sdpmt_51030",
+                            "_score": 0
+                          }
+                        ],
+                        "total": 1,
+                        "max_score": 0
+                      }
+                    },
+                    "doc_count": 1,
+                    "key": "sdpmt_51030"
+                  }
+                ]
+              }
+            }
+          },
+          "search": {
+            "request": {
+              "search_type": "query_then_fetch",
+              "indices": [
+                "sdpmt_amdb"
+              ],
+              "rest_total_hits_as_int": true,
+              "body": {
+                "size": 10,
+                "query": {
+                  "bool": {
+                    "filter": [
+                      {
+                        "match_phrase": {
+                          "target.keyword": "sdpmt_51030"
+                        }
+                      }
+                    ]
+                  }
+                },
+                "aggs": {
+                  "target": {
+                    "terms": {
+                      "field": "target.keyword",
+                      "size": 100
+                    },
+                    "aggs": {
+                      "hits": {
+                        "top_hits": {
+                          "_source": [
+                            "alert_status"
+                          ],
+                          "size": 20
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "errors": {
+          "type": "search",
+          "status": "success",
+          "payload": {
+            "_shards": {
+              "total": 732,
+              "failed": 0,
+              "successful": 732,
+              "skipped": 715
+            },
+            "hits": {
+              "hits": [],
+              "total": 1,
+              "max_score": null
+            },
+            "took": 28,
+            "_clusters": {
+              "running": 0,
+              "total": 1,
+              "details": {
+                "prod": {
+                  "_shards": {
+                    "total": 732,
+                    "failed": 0,
+                    "successful": 732,
+                    "skipped": 715
+                  },
+                  "took": 24,
+                  "indices": "filebeat-*-mt-*",
+                  "timed_out": false,
+                  "status": "successful"
+                }
+              },
+              "failed": 0,
+              "partial": 0,
+              "successful": 1,
+              "skipped": 0
+            },
+            "timed_out": false,
+            "aggregations": {
+              "targets": {
+                "doc_count_error_upper_bound": 0,
+                "sum_other_doc_count": 0,
+                "buckets": [
+                  {
+                    "doc_count": 1,
+                    "top_hits": {
+                      "hits": {
+                        "hits": [
+                          {
+                            "_index": "prod:.ds-filebeat-8.11.0-mt-prd-2026.02.22-001251",
+                            "_source": {
+                              "labels": {
+                                "alert": {
+                                  "anomaly_details_link": "https://console.aws.amazon.com/costmanagement/home#/anomaly-detection/monitors/96274bde-9403-4836-95e6-ef845546875c/anomalies/469c4a90-41f3-4c9c-88c1-c0f56479b243",
+                                  "impact": {
+                                    "total_impact": 466.23
+                                  },
+                                  "member": {
+                                    "account": {
+                                      "name": "hedgeserv-app-prd",
+                                      "id": "444205886984"
+                                    }
+                                  },
+                                  "monitor": {
+                                    "owner": "TechOps"
+                                  },
+                                  "subscription": {
+                                    "name": "costam- $100 and 3%"
+                                  }
+                                }
+                              }
+                            },
+                            "_id": "80abefbe-df49-4e89-9a66-e6a4221e01d0",
+                            "_score": 0
+                          }
+                        ],
+                        "total": 1,
+                        "max_score": 0
+                      }
+                    },
+                    "key": "costam-prd HSMCS"
+                  }
+                ]
+              }
+            }
+          },
+          "search": {
+            "request": {
+              "search_type": "query_then_fetch",
+              "indices": [
+                "prod:filebeat-*-mt-*"
+              ],
+              "rest_total_hits_as_int": true,
+              "body": {
+                "size": 0,
+                "query": {
+                  "bool": {
+                    "filter": [
+                      {
+                        "terms": {
+                          "_tier": [
+                            "data_hot",
+                            "data_content"
+                          ]
+                        }
+                      },
+                      {
+                        "term": {
+                          "cloud.account.id": "417330998292"
+                        }
+                      },
+                      {
+                        "range": {
+                          "@timestamp": {
+                            "gte": "now-2d"
+                          }
+                        }
+                      },
+                      {
+                        "range": {
+                          "@timestamp": {
+                            "format": "strict_date_optional_time",
+                            "gte": "2026-02-26T12:32:23.673Z",
+                            "lte": "2026-02-26T13:37:23.673Z"
+                          }
+                        }
+                      },
+                      {
+                        "term": {
+                          "cloud.service.name": "Cost Anomaly Alerting"
+                        }
+                      }
+                    ]
+                  }
+                },
+                "aggs": {
+                  "targets": {
+                    "terms": {
+                      "field": "labels.alert.monitor.name",
+                      "size": 5000
+                    },
+                    "aggs": {
+                      "top_hits": {
+                        "top_hits": {
+                          "size": 1,
+                          "_source": [
+                            "labels.alert.impact.total_impact",
+                            "labels.alert.subscription.name",
+                            "labels.alert.member.account.name",
+                            "labels.alert.member.account.id",
+                            "labels.alert.monitor.owner",
+                            "labels.alert.anomaly_details_link"
+                          ]
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              "template": {
+                "source": "\n                      {\n                        \"size\": 0,\n                        \"query\": {\n                          \"bool\": {\n                            \"filter\": [\n                              {\n                                \"terms\": {\n                                  \"_tier\": [\n                                    \"data_hot\",\n                                    \"data_content\"\n                                    ]\n                                }\n                              },\n                              {\n                                \"term\": {\n                                  \"cloud.account.id\": \"417330998292\"\n                                }\n                              },\n                              {\n                                \"range\": {\n                                  \"@timestamp\": {\n                                    \"gte\": \"now-{{ctx.metadata.timeRangeValue}}{{ctx.metadata.timeRangeUnit}}\"\n                                  }\n                                }\n                              },\n                              {\n                                \"range\": {\n                                  \"@timestamp\": {\n                                    \"format\": \"strict_date_optional_time\",\n                                    \"gte\": \"2026-02-26T12:32:23.673Z\",\n                                    \"lte\": \"2026-02-26T13:37:23.673Z\"\n                                  }\n                                }\n                              },\n                              {\n                                \"term\": {\n                                  \"cloud.service.name\": \"Cost Anomaly Alerting\"\n                                }\n                              }\n                              ]\n                              \n                          }\n                        },\n                        \"aggs\": {\n                          \"targets\": {\n                            \"terms\": {\n                              \"field\": \"labels.alert.monitor.name\",\n                              \"size\": 5000\n                            },\n                            \"aggs\": {\n                              \"top_hits\": {\n                                  \"top_hits\": {\n                                  \"size\": 1,\n                                  \"_source\": [\n                                      \"labels.alert.impact.total_impact\",\n                                      \"labels.alert.subscription.name\",\n                                      \"labels.alert.member.account.name\",\n                                      \"labels.alert.member.account.id\",\n                                      \"labels.alert.monitor.owner\",\n                                      \"labels.alert.anomaly_details_link\"\n                                  ]\n                                  }\n                              }\n                              }\n                          }\n                        }\n                      }",
+                "lang": "mustache"
+              }
+            }
+          }
+        },
+        "targets_to_alert_on": {
+          "type": "transform",
+          "status": "success",
+          "payload": {
+            "_value": [
+              "costam-prd HSMCS"
+            ]
+          }
+        },
+        "open_tickets": {
+          "type": "search",
+          "status": "success",
+          "payload": {
+            "_shards": {
+              "total": 1,
+              "failed": 0,
+              "successful": 1,
+              "skipped": 0
+            },
+            "hits": {
+              "hits": [
+                {
+                  "_index": "sdpmt_tickets",
+                  "_source": {
+                    "actual": "",
+                    "aws_tag_label": "",
+                    "aws_account": "hedgeserv-app-prd",
+                    "threshold": "466.23",
+                    "ticket_id": "2158391",
+                    "priority": "3 - Moderate",
+                    "labels": {
+                      "client_code": ": {\n            "
+                    },
+                    "@timestamp": "2026-02-27T14:31:14.164Z",
+                    "event_type": "sdpmt_51030",
+                    "aws_region": "",
+                    "record": {
+                      "created_timestamp": "2026-02-27T14:31:55.193Z",
+                      "created_by": "track_sdpmt_tickets_watcher"
+                    },
+                    "host": {
+                      "target": "costam-prd HSMCS"
+                    },
+                    "status": "open"
+                  },
+                  "_id": "2158391",
+                  "_score": 0
+                },
+                {
+                  "_index": "sdpmt_tickets",
+                  "_source": {
+                    "actual": "",
+                    "aws_tag_label": "",
+                    "aws_account": "hedgeserv-app-prd",
+                    "threshold": "466.23",
+                    "ticket_id": "2158445",
+                    "priority": "2 - High",
+                    "labels": {
+                      "client_code": ": {\n            "
+                    },
+                    "@timestamp": "2026-02-27T15:00:07.990Z",
+                    "event_type": "sdpmt_51030",
+                    "aws_region": "",
+                    "record": {
+                      "created_timestamp": "2026-02-27T15:00:55.035Z",
+                      "created_by": "track_sdpmt_tickets_watcher"
+                    },
+                    "host": {
+                      "target": "costam-prd HSMCS"
+                    },
+                    "status": "open"
+                  },
+                  "_id": "2158445",
+                  "_score": 0
+                }
+              ],
+              "total": 2,
+              "max_score": 0
+            },
+            "took": 1,
+            "timed_out": false
+          },
+          "search": {
+            "request": {
+              "search_type": "query_then_fetch",
+              "indices": [
+                "sdpmt_tickets"
+              ],
+              "rest_total_hits_as_int": true,
+              "body": {
+                "size": 5000,
+                "query": {
+                  "bool": {
+                    "filter": [
+                      {
+                        "terms": {
+                          "host.target": [
+                            "costam-prd HSMCS"
+                          ]
+                        }
+                      },
+                      {
+                        "term": {
+                          "status": "open"
+                        }
+                      },
+                      {
+                        "term": {
+                          "event_type": "sdpmt_51030"
+                        }
+                      }
+                    ]
+                  }
+                }
+              },
+              "template": {
+                "source": "\n                        {\n                          \"size\": 5000,\n                          \"query\": {\n                            \"bool\": {\n                              \"filter\": [\n                                {\n                                  \"terms\": {\n                                    \"host.target\": {{#toJson}}ctx.payload.targets_to_alert_on._value{{/toJson}}\n                                  }\n                                },\n                                {\n                                  \"term\": {\n                                    \"status\": \"open\"\n                                  }\n                                },\n                                {\n                                  \"term\": {\n                                    \"event_type\": \"{{ ctx.metadata.event_type }}\"\n                                  }\n                                }\n                              ]\n                            }\n                          }\n                        }\n                        ",
+                "lang": "mustache"
+              }
+            }
+          }
+        }
+      }
+    },
+    "condition": {
+      "type": "script",
+      "status": "success",
+      "met": true
+    },
+    "transform": {
+      "type": "script",
+      "status": "failure",
+      "reason": "runtime error",
+      "error": {
+        "root_cause": [
+          {
+            "type": "script_exception",
+            "reason": "runtime error",
+            "script_stack": [
+              "java.base/java.util.stream.Collectors.duplicateKeyException(Collectors.java:135)",
+              "java.base/java.util.stream.Collectors.lambda$uniqKeysMapAccumulator$0(Collectors.java:182)",
+              "java.base/java.util.stream.ReduceOps$3ReducingSink.accept(ReduceOps.java:169)",
+              "java.base/java.util.ArrayList$ArrayListSpliterator.forEachRemaining(ArrayList.java:1716)",
+              "java.base/java.util.stream.AbstractPipeline.copyInto(AbstractPipeline.java:570)",
+              "java.base/java.util.stream.AbstractPipeline.wrapAndCopyInto(AbstractPipeline.java:560)",
+              "java.base/java.util.stream.ReduceOps$ReduceOp.evaluateSequential(ReduceOps.java:921)",
+              "java.base/java.util.stream.AbstractPipeline.evaluate(AbstractPipeline.java:265)",
+              "java.base/java.util.stream.ReferencePipeline.collect(ReferencePipeline.java:727)",
+              "h -> ['ticket_id': h._source.ticket_id, 'priority': h._source.priority]\n            ));\n            \n            // store two lists of host buckets\n            List ",
+              "^---- HERE"
+            ],
+            "script": " ...",
+            "lang": "painless",
+            "position": {
+              "offset": 309,
+              "start": 309,
+              "end": 474
+            }
+          }
+        ],
+        "type": "script_exception",
+        "reason": "runtime error",
+        "script_stack": [
+          "java.base/java.util.stream.Collectors.duplicateKeyException(Collectors.java:135)",
+          "java.base/java.util.stream.Collectors.lambda$uniqKeysMapAccumulator$0(Collectors.java:182)",
+          "java.base/java.util.stream.ReduceOps$3ReducingSink.accept(ReduceOps.java:169)",
+          "java.base/java.util.ArrayList$ArrayListSpliterator.forEachRemaining(ArrayList.java:1716)",
+          "java.base/java.util.stream.AbstractPipeline.copyInto(AbstractPipeline.java:570)",
+          "java.base/java.util.stream.AbstractPipeline.wrapAndCopyInto(AbstractPipeline.java:560)",
+          "java.base/java.util.stream.ReduceOps$ReduceOp.evaluateSequential(ReduceOps.java:921)",
+          "java.base/java.util.stream.AbstractPipeline.evaluate(AbstractPipeline.java:265)",
+          "java.base/java.util.stream.ReferencePipeline.collect(ReferencePipeline.java:727)",
+          "h -> ['ticket_id': h._source.ticket_id, 'priority': h._source.priority]\n            ));\n            \n            // store two lists of host buckets\n            List ",
+          "^---- HERE"
+        ],
+        "script": " ...",
+        "lang": "painless",
+        "position": {
+          "offset": 309,
+          "start": 309,
+          "end": 474
+        },
+        "caused_by": {
+          "type": "illegal_state_exception",
+          "reason": "Duplicate key costam-prd HSMCS (attempted merging values {ticket_id=2158391, priority=3 - Moderate} and {ticket_id=2158445, priority=2 - High})"
+        }
+      }
+    },
+    "actions": []
+  },
+  "messages": [
+    "failed to execute watch transform"
+  ]
+}
